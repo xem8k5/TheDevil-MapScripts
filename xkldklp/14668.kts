@@ -11,7 +11,6 @@ package mapScript
 import arc.func.Func
 import arc.math.Angles
 import arc.math.Mathf
-import arc.math.Mathf.ceil
 import arc.math.geom.Position
 import arc.math.geom.Vec2
 import arc.struct.ObjectIntMap
@@ -29,9 +28,11 @@ import mindustry.entities.Units
 import mindustry.entities.units.UnitController
 import mindustry.game.EventType
 import mindustry.game.Team
+import mindustry.game.Teams.TeamData
 import mindustry.gen.*
 import mindustry.type.StatusEffect
 import mindustry.type.UnitType
+import mindustry.world.blocks.campaign.LaunchPad
 import mindustry.world.blocks.storage.CoreBlock
 import mindustry.world.blocks.storage.CoreBlock.CoreBuild
 import java.lang.Float.min
@@ -199,6 +200,20 @@ val startTime by lazy { Time.millis() }
 fun Player.checkCooldown(): Boolean{ return cooldown.get(uuid()) <= Time.timeSinceMillis(startTime) }
 fun Player.setCooldown(time: Float){ cooldown.put(uuid(), (Time.timeSinceMillis(startTime) + time * 1000).toInt()) }
 
+data class PadData(
+    var targetPad: LaunchPad.LaunchPadBuild? = null,
+    var name: String = ""
+)
+
+val padData by lazy { mutableMapOf<LaunchPad.LaunchPadBuild, PadData?>() }
+fun LaunchPad.LaunchPadBuild.padData(): PadData {
+    if(padData[this] == null) {
+        val data = PadData()
+        padData[this] = data
+    }
+    return padData[this]!!
+}
+
 @Suppress("unused", "unused", "unused", "unused", "unused")
 data class TeamTech(
     val team: Team,
@@ -209,14 +224,14 @@ data class TeamTech(
     val bulletStatusEffect: MutableMap<StatusEffect, Float> = mutableMapOf(),
     var bulletStatusEffectProbability: Float = 0.05f,
     val unitStatusEffect: MutableMap<StatusEffect, Float> = mutableMapOf(),
-    var unitStatusEffectProbability: Float = 0.1f,
+    var unitStatusEffectProbability: Float = 0.25f,
     var lordUnitHealthMultiplier: Float = 1f,
     var lordUnitSpawnInvincibleTime: Float = 0f,
     var lordUnitExplosionMultiplier: Float = 1f,
     var lordUnitSpawnTimeMultiplier: Float = 1f,
     var lordUnitCostMultiplier: Float = 1f,
     var upgradeAndRollMultiplier: Float = 1f,
-    var randomSeed: Int = Random.nextInt(0, 99999)
+    var randomSeed: Int = Random.nextInt(0, 999999)
 ){
     fun checkEffectBulletHit(): Boolean{
         return Random.nextFloat() <= bulletStatusEffectProbability
@@ -227,7 +242,11 @@ data class TeamTech(
     }
 
     fun techCost(): Int{
-        return ((level + 1) * (min(team.cores().size / 2f, 4f)) * 3f + 4f).pow(3).toInt()
+        var cores = 0f
+        state.teams.getActive().forEach {
+            cores += it.cores.size
+        }
+        return (((level + 1) * 3.5f + 5f).pow(3) * (team.cores().size / cores) * 9).toInt()
     }
 }
 
@@ -258,9 +277,9 @@ class CityTypes(
     val LogisticsEconomic: CityType = CityType("[olive]补给经济城市", 1.3f, 1.5f, 1.25f, 0.8f, 2.1f),
     val WarLogistics: CityType = CityType("[tan]军工补给城市", 0.45f, 1.5f, 0.95f, 0.6f, 2.4f),
     val WarLogisticsEconomic: CityType = CityType("[cyan]军工补给经济城市", 1.5f, 2f, 0.9f, 0.3f, 5.2f),
-    val ResearchI: CityType = CityType("[sky]科研城市", 0.75f, 0.75f, 1.15f, 1.5f, 0.8f),
-    val ResearchII: CityType = CityType("[sky]科研中心", 0.5f, 0.5f, 1.25f, 3f, 2.4f),
-    val ResearchIII: CityType = CityType("[sky]科研基地", 0.25f, 0.25f, 1.5f, 6f, 5.2f),
+    val ResearchI: CityType = CityType("[sky]科研城市", 0.75f, 0.75f, 1.15f, 2f, 0.8f),
+    val ResearchII: CityType = CityType("[sky]科研中心", 0.5f, 0.5f, 1.25f, 4f, 2.4f),
+    val ResearchIII: CityType = CityType("[sky]科研基地", 0.25f, 0.25f, 1.5f, 8f, 5.2f),
     ){
     fun toArray(): Array<Array<CityType>>{
         return arrayOf(
@@ -685,7 +704,7 @@ suspend fun Player.warMenu(core: CoreBuild) {
                                 sendMessage("[red]金钱不足！")
                             }
                         } else if (unitType().level() < 5)
-                        "[cyan]你需要金币[#${team().color}]${Iconc.blockCliff}${unitType().cost() * 25}[cyan]来升级军团等级" to {
+                        "[cyan]你需要金币[#${team().color}]${Iconc.blockCliff}${unitType().cost() * 25 * team().techData().upgradeAndRollMultiplier}[cyan]来升级军团等级" to {
                             warMenu(core)
                         } else
                         "[cyan]军团等级已满！" to {
@@ -872,6 +891,27 @@ suspend fun Player.bankMenu(core: CoreBuild) {
             }
     )
     this += listOf(
+         "[yellow]科伦坡富豪榜" to {
+             sendMessage(buildString {
+                 appendLine("[cyan]谁是最有钱的资本家?")
+                 var target = Groups.player.maxByOrNull { it.coins() }!!
+                 appendLine("[yellow]是坐拥[#${target.team().color}]${Iconc.blockCliff}${target.coins()}[yellow]的[white]${target.name}[yellow]哒!")
+                 appendLine("[cyan]谁是你家里最有钱的资本家?")
+                 target = Groups.player.filter { it.team() == team() }.maxByOrNull { it.coins() }!!
+                 appendLine("[yellow]是坐拥[#${target.team().color}]${Iconc.blockCliff}${target.coins()}[yellow]的[white]${target.name}[yellow]哒!")
+                 append("[cyan]看看你队伍里资本家们的财富和军团！")
+                 Groups.player.filter { it.team() == team() }.sortedBy { it.coins() }.reversed().forEach {
+                     append("\n[white]${it.name} ")
+                     append("[#${it.team().color}]${Iconc.blockCliff}${it.coins()}")
+                     if(it.unitType() != null)
+                        append("[white]  ${it.unitType()!!.emoji()}")
+                     if(it.lordUnitType() != null)
+                         append("|${it.lordUnitType()!!.emoji()} ${ if(it.checkLordCooldown()) "[green]准备就绪" else "[red]${playerLordCooldown[it.uuid()] / 1000 - Time.timeSinceMillis(startTime) / 1000}s" }")
+                 }
+             })
+         }
+    )
+    this += listOf(
         "军团" to {warMenu(core)},
         "城市" to {cityMenu(core)},
         "[green]银行" to {bankMenu(core)},
@@ -1013,10 +1053,11 @@ suspend fun Player.techMenu(core: CoreBuild) {
             }
         })
         this += listOf(
-            "[cyan]效果弹头" to {
+            "[cyan]效果弹头 [white]${buildString { team().techData().bulletStatusEffect.keys.forEach { append(it.emoji()) } }}" to {
                 sendMessage(buildString {
                     appendLine("[cyan]单位攻击有概率射出附带负面buff的子弹")
-                    append("[white]目前的效果弹头：${buildString { team().techData().bulletStatusEffect.keys.forEach { append(it.emoji()) } }}")
+                    appendLine("[white]目前的效果弹头：${buildString { team().techData().bulletStatusEffect.keys.forEach { append(it.emoji()) } }}")
+                    append("[yellow]目前触发概率${(team().techData().bulletStatusEffectProbability * 100f).format()}%")
                 })
             }
         )
@@ -1032,10 +1073,11 @@ suspend fun Player.techMenu(core: CoreBuild) {
                 }
         })
         this += listOf(
-            "[cyan]兵营效果" to {
+            "[cyan]兵营效果 [white]${buildString { team().techData().unitStatusEffect.keys.forEach { append(it.emoji()) } }}" to {
                 sendMessage(buildString {
                     appendLine("[cyan]招募单位有概率附带buff")
-                    append("[white]目前的兵营效果：${buildString { team().techData().unitStatusEffect.keys.forEach { append(it.emoji()) } }}")
+                    appendLine("[white]目前的兵营效果：${buildString { team().techData().unitStatusEffect.keys.forEach { append(it.emoji()) } }}")
+                    append("目前触发概率${(team().techData().unitStatusEffectProbability * 100f).format()}%")
                 })
             }
         )
@@ -1043,7 +1085,7 @@ suspend fun Player.techMenu(core: CoreBuild) {
             this += listOf("兵营效果触发概率\n${(team().techData().unitStatusEffectProbability * 100f).format()}% -> ${((team().techData().unitStatusEffectProbability + 0.1f) * 100f).format()}%" to {
                 if (team().techData().techPoint > 0) {
                     team().techData().techPoint--
-                    team().techData().unitStatusEffectProbability += 0.1f
+                    team().techData().unitStatusEffectProbability += 0.25f
                     Call.sendMessage("[white]$name [#${team().color}]提高了兵营效果触发概率！(${((team().techData().unitStatusEffectProbability - 0.1f) * 100f).format()}% -> ${(team().techData().unitStatusEffectProbability * 100f).format()}%)")
                     techMenu(core)
                 } else {
@@ -1060,39 +1102,27 @@ suspend fun Player.techMenu(core: CoreBuild) {
                     appendLine("[#${team().color}]领主降临时间倍率：[white]${(team().techData().lordUnitSpawnTimeMultiplier * 100f).format()}%")
                     appendLine("[#${team().color}]领主降临后爆炸倍率：[white]${(team().techData().lordUnitExplosionMultiplier * 100f).format()}%")
                     appendLine("[#${team().color}]领主降临后临时无敌时间：[white]${(team().techData().lordUnitSpawnInvincibleTime).format(1)}s")
-                    appendLine(
-                        "[#${team().color}]领主降临后临时无敌时间：[white]${
-                            (team().techData().lordUnitSpawnInvincibleTime).format(
-                                1
-                            )
-                        }s)"
-                    )
                     appendLine("[#${team().color}]领主降临花费倍率：[white]${(team().techData().lordUnitCostMultiplier * 100f).format()}%")
                 })
             }
         )
-        val statusEffectListB = listOf(
-            StatusEffects.wet,
-            StatusEffects.sporeSlowed,
-            StatusEffects.shocked,
-            StatusEffects.blasted,
-            StatusEffects.tarred,
-            StatusEffects.freezing
+        val statusEffectListB = mapOf(
+            StatusEffects.wet to 1.25f * 60f,
+            StatusEffects.corroded to 5f * 60f,
+            StatusEffects.shocked to 1f * 60f,
+            StatusEffects.blasted to 1f * 60f,
+            StatusEffects.tarred to 5f * 60f,
+            StatusEffects.freezing to 1.25f * 60f
         )
         fun bulletEffectInfo(type: StatusEffect): Pair<String, suspend () -> Unit> {
             return if(type in team().techData().bulletStatusEffect.keys.toList())
-                "[cyan]获得过的科技\n点击消耗科技点刷新" to suspend {
-                    if (team().techData().techPoint > 0) {
-                        team().techData().techPoint--
-                        team().techData().randomSeed = Random.nextInt(0, 9999)
-                        Call.sendMessage("[white]$name [#${team().color}]花费了1点科技点重置了科技选择！")
-                        techMenu(core)
-                    }
+                "[cyan]获得过的科技" to suspend {
+                    techMenu(core)
                 }
             else "效果弹头\n${type.emoji()}" to suspend {
                 if (team().techData().techPoint > 0 && type !in team().techData().bulletStatusEffect.keys.toList()) {
                     team().techData().techPoint--
-                    team().techData().bulletStatusEffect[type] = 5 * 60f
+                    team().techData().bulletStatusEffect[type] = statusEffectListB[type] ?: (5 * 60f)
                     Call.sendMessage("[white]$name [#${team().color}]给队伍加装了新的效果弹头！(${type.emoji()})")
                     techMenu(core)
                 }
@@ -1105,13 +1135,8 @@ suspend fun Player.techMenu(core: CoreBuild) {
         )
         fun unitEffectInfo(type: StatusEffect): Pair<String, suspend () -> Unit> {
             return if(type in team().techData().unitStatusEffect.keys.toList())
-                    "[cyan]获得过的科技\n点击消耗科技点刷新" to suspend {
-                        if (team().techData().techPoint > 0) {
-                            team().techData().techPoint--
-                            team().techData().randomSeed = Random.nextInt(0, 9999)
-                            Call.sendMessage("[white]$name [#${team().color}]花费了1点科技点重置了科技选择！")
-                            techMenu(core)
-                        }
+                    "[cyan]获得过的科技" to suspend {
+                        techMenu(core)
                     }
             else "兵营效果\n${type.emoji()}" to suspend {
                     if (team().techData().techPoint > 0 && type !in team().techData().unitStatusEffect.keys.toList()) {
@@ -1123,7 +1148,7 @@ suspend fun Player.techMenu(core: CoreBuild) {
             }
         }
         val array = arrayOf<List<List<Pair<String, suspend () -> Unit>>>>(
-            buildList{ statusEffectListB.forEach {
+            buildList{ statusEffectListB.keys.forEach {
                     add(buildList { add(bulletEffectInfo(it)) })
                 }},
             buildList { statusEffectListU.forEach {
@@ -1151,7 +1176,11 @@ suspend fun Player.techMenu(core: CoreBuild) {
                         if (team().techData().exp >= (team().techData().techCost() * 0.25f).toInt()) {
                             team().techData().exp -= (team().techData().techCost() * 0.25f).toInt()
                             team().techData().randomSeed = Random.nextInt(0, 9999)
-                            Call.sendMessage("[white]$name [#${team().color}]花费了[sky]${Iconc.teamSharded}${(team().techData().techCost() * 0.25f).toInt()}[#${team().color}]重置了科技选择！")
+                            Call.sendMessage(
+                                "[white]$name [#${team().color}]花费了[sky]${Iconc.teamSharded}${
+                                    (team().techData().techCost() * 0.25f).toInt()
+                                }[#${team().color}]重置了科技选择！"
+                            )
                             techMenu(core)
                         }
                     })
@@ -1163,17 +1192,24 @@ suspend fun Player.techMenu(core: CoreBuild) {
                         techMenu(core)
                     })
             }
-            repeat(team().techData().techPoint) { i ->
-                add(
-                    buildList {
-                        repeat(3) { j ->
-                            val seed =
-                                Random(team().techData().randomSeed * (team().id * 100000 + ((i + 1) * 1000 + (j + 1))))
-                            add(array.random(seed).random(seed).random(seed))
-                        }
-                    }.reversed()
-                )
-            }
+            add(
+                buildList {
+                    repeat(2) { j ->
+                        val seed =
+                            Random(team().techData().randomSeed * (team().id * 1000 + j) * (team().techData().level - team().techData().techPoint))
+                        add(array.random(seed).random(seed).random(seed))
+                    }
+                }
+            )
+            add(
+                buildList {
+                    repeat(2) { j ->
+                        val seed =
+                            Random(team().techData().randomSeed * (team().id * 10000 + j) * (team().techData().level - team().techData().techPoint))
+                        add(array.random(seed).random(seed).random(seed))
+                    }
+                }.reversed()
+            )
         }
         this += listOf(
             "属性" to {lordMenu(core)},
@@ -1252,6 +1288,10 @@ class DisruptMissileAi: MissileAI() {
      }
 }
 
+fun TeamData.pads(): List<Building> {
+    return Groups.build.filter { it.team == team && it.block is LaunchPad }
+}
+
 onEnable{
     //反正不影响同步 我也不会用ct改 (((
     contextScript<coreMindustry.UtilMapRule>().registerMapRule(
@@ -1264,6 +1304,14 @@ onEnable{
     contextScript<coreMindustry.ContentsTweaker>().addPatch("Lord Of War",
            "{\n" +
                    "  \"block\": {\n" +
+                   "    \"launch-pad\": {\n" +
+                   "      \"health\": 5000,\n" +
+                   "      \"requirements\": [\n" +
+                   "        \"copper/1000\",\n" +
+                   "        \"lead/800\"\n" +
+                   "      ],\n" +
+                   "      \"solid\": false\n" +
+                   "    },\n" +
                    "    \"core-shard\": {\n" +
                    "      \"health\": 2500,\n" +
                    "      \"armor\": 5\n" +
@@ -1448,6 +1496,17 @@ onEnable{
                    "    },\n" +
                    "    \"scepter\": {\n" +
                    "      \"health\": 2680,\n" +
+                   "      \"weapons.0.shoot.shots\": 2,\n" +
+                   "      \"weapons.0.bullet.damage\": 65,\n" +
+                   "      \"weapons.0.bullet.lightningType.lightningDamage\": 30,\n" +
+                   "      \"weapons.1.shoot.shots\": 2,\n" +
+                   "      \"weapons.2.shoot.shots\": 3,\n" +
+                   "      \"weapons.2.bullet.damage\": 24,\n" +
+                   "      \"weapons.3.shoot.shots\": 3,\n" +
+                   "      \"weapons.1.shoot.shotDelay\": 2,\n" +
+                   "      \"weapons.4.shoot.shots\": 3,\n" +
+                   "      \"weapons.5.shoot.shots\": 3,\n" +
+                   "      \"weapons.5.shoot.shotDelay\": 2,\n" +
                    "      \"armor\": 26\n" +
                    "    },\n" +
                    "    \"toxopid\": {\n" +
@@ -1589,6 +1648,7 @@ onEnable{
         state.rules.apply {
             modeName = "LordOfWar"
             unitCap = 99
+            revealedBlocks.add(Blocks.launchPad)
         }
     }
     loop(Dispatchers.game){
@@ -1654,6 +1714,41 @@ onEnable{
         }
         delay(1000)
     }
+    loop(Dispatchers.game) {
+        state.teams.getActive().forEach { t ->
+            val pads = t.pads()
+            pads.forEach {
+                val pad = (it as LaunchPad.LaunchPadBuild)
+                val allyText = buildString {
+                    appendLine("[#${t.team.color}]${if(pad.padData().name != "") pad.padData().name else "(${pad.tileX()},${pad.tileY()})"}")
+                    val targetPad = pad.padData().targetPad
+                    appendLine("[#${t.team.color}]传送目标 ${targetPad?.padData()?.name ?: ""}")
+                    if (targetPad == null) {
+                        append("[lightgray]未配置")
+                    } else if (!targetPad.isValid){
+                        append("[lightgray]失效")
+                    } else {
+                        append("[white]${Iconc.blockLaunchPad}(${targetPad.tileX()},${targetPad.tileY()})${Iconc.blockLaunchPad}")
+                    }
+                }
+                val enemyText = buildString {
+                    appendLine("[#${t.team.color}]传送发射台")
+                    appendLine("${Iconc.blockLaunchPad}[#${t.team.color}][white](${pad.tileX()},${pad.tileY()})[#${t.team.color}]${Iconc.blockLaunchPad}")
+                    appendLine("[#${t.team.color}]传送目标")
+                    append("[lightgray]未知")
+                }
+                Groups.player.filter { p ->
+                    (p.within(pad.x, pad.y, 60f * 8f)
+                            || (world.tileWorld(p.mouseX, p.mouseY) != null
+                            && world.tileWorld(p.mouseX, p.mouseY).within(pad.x, pad.y, 30f * 8f)))
+                            && fogControl.isVisible(p.team(), pad.x, pad.y)
+                }.forEach { p ->
+                    Call.labelReliable(p.con, if (p.team() == it.team) allyText else enemyText, 1.013f, pad.x, pad.y)
+                }
+            }
+        }
+        delay(1000)
+    }
     loop(Dispatchers.game){
         Groups.player.forEach{
             val text = buildString {
@@ -1682,26 +1777,160 @@ onEnable{
     }
 }
 
+suspend fun Player.launchPadMenu(pad: LaunchPad.LaunchPadBuild) {
+    val pads = team().data().pads()
+    menu.sendMenuBuilder<Unit>(
+        this, 30_000, "[green]发射台页面 [#${pad.team.color}]${pad.padData().name}\n[cyan]发射台总数[yellow]${pads.size}",
+        """
+            [cyan]当前拥有金币[#${team().color}]${Iconc.blockCliff}${coins()}
+            [cyan]当前科技等级[#${team().color}]${team().techData().level}
+            [cyan]各种发射台连锁效果！
+        """.trimIndent()
+    ) {
+        val targetPad = pad.padData().targetPad
+        this += listOf(
+            if (pads.size >= 2) {
+                if (targetPad != null) {
+                    if (targetPad.isValid) {
+                        "[cyan]目标已经选定！\n[white]${Iconc.blockLaunchPad}(${targetPad.tileX()},${targetPad.tileY()})${Iconc.blockLaunchPad} [#${targetPad.team.color}]${targetPad.padData().name}"
+                    } else {
+                        "[lightgray]目标失效！点击重新选择目标"
+                    }
+                } else {
+                    "[lightgray]未配置！点击重新选择目标"
+                } to {
+                    menu.sendMenuBuilder<Unit>(
+                        this@launchPadMenu, 30_000, "[green]发射台页面\n[cyan]发射台总数[yellow]${pads.size}",
+                        """
+                           [cyan]选择发射台目标
+                        """.trimIndent()
+                    ) {
+                        pads.filter{ it != pad }.forEach {
+                            add(listOf("[white]${Iconc.blockLaunchPad}(${it.tileX()},${it.tileY()})${Iconc.blockLaunchPad} [#${it.team.color}]${(it as LaunchPad.LaunchPadBuild).padData().name}" to {
+                                pad.padData().targetPad = it
+                            }))
+                        }
+                        this += listOf(
+                            "取消" to {}
+                        )
+                    }
+                    launchPadMenu(pad)
+                }
+            } else {
+                "[lightgray]队伍发射台数量不足！" to { launchPadMenu(pad) }
+            })
+        playerInputing[uuid()] = false
+        this += listOf(
+            "[cyan]命名发射台！" to {
+                val playerLastText = playerLastSendText[uuid()]
+                sendMessage("------------\n[yellow]请输入此发射台改名名称(最大五个字)\n[white]------------")
+                val startInputTime = Time.millis()
+                var fail = true
+                var newName = "- "
+                playerInputing[uuid()] = true
+                while (Time.timeSinceMillis(startInputTime) / 1000 <= 15) {
+                    if (playerInputing[uuid()] == false) break
+                    if (playerLastText != playerLastSendText[uuid()] && playerLastSendText[uuid()] != null){
+                        if (playerLastSendText[uuid()] == pad.padData().name || playerLastSendText[uuid()]!!.length > 5){
+                            break
+                        }
+                        newName += playerLastSendText[uuid()]
+                        pad.padData().name = newName
+                        fail = false
+                        break
+                    }
+                    yield()
+                }
+                if (fail) {
+                    sendMessage("命名失败！")
+                } else {
+                    sendMessage("命名成功！现在此发射台名为：${playerLastSendText[uuid()]}")
+                }
+                playerLastSendText[uuid()] = ""
+            }
+        )
+        if (targetPad != null && targetPad.isValid){
+            this += listOf("[cyan]传送你附近的军团单位至目标发射台！\n[red]可能会有副作用！" to {
+                Call.effect(Fx.teleport, pad.x, pad.y, 0f, team().color)
+                Units.nearby(team(), pad.x, pad.y, itemTransferRange) {
+                    if (it.owner() == uuid() || it == unit())
+                        launch(Dispatchers.game) {
+                            var times = 0
+                            while (true) {
+                                Tmp.v1.rnd(Random.nextFloat() * itemTransferRange / 2)
+
+                                var sx = targetPad.x + Tmp.v1.x
+                                var sy = targetPad.y + Tmp.v1.y
+
+                                if (it.canPass(World.toTile(sx), World.toTile(sy))) {
+                                    while (!it.within(targetPad.x, targetPad.y, itemTransferRange)) {
+                                        it.set(sx, sy)
+                                        yield()
+                                    }
+                                    Call.effect(Fx.teleportOut, sx, sy, 0f, team().color)
+                                    break
+                                }
+                                if (++times > 20) {
+                                    sx = targetPad.x
+                                    sy = targetPad.y
+                                    while (!it.within(targetPad.x, targetPad.y, itemTransferRange)) {
+                                        it.set(sx, sy)
+                                        yield()
+                                    }
+                                    Call.effect(Fx.teleportOut, sx, sy, 0f, team().color)
+                                    break
+                                }
+                            }
+                            it.apply(StatusEffects.unmoving, (it.speed() / 1.5f) * 5f * 60f)
+                            it.apply(StatusEffects.disarmed, (it.speed() / 1.5f) * 3.5f * 60f)
+                            it.apply(StatusEffects.slow, (it.speed() / 1.5f) * 10.5f * 60f)
+                            if (it == unit()) Call.setCameraPosition(con, targetPad.x, targetPad.y)
+                        }
+                }
+                Call.effect(Fx.teleportActivate, targetPad.x, targetPad.y, 0f, team().color)
+                targetPad.maxHealth /= 1.5f
+                targetPad.clampHealth()
+                pad.maxHealth /= 1.5f
+                pad.clampHealth()
+            })
+        }
+        this += listOf(
+            "取消" to {}
+        )
+    }
+}
+
 listen<EventType.TapEvent> {
     val player = it.player
     if (player.dead()) return@listen
-    if (it.tile.block() is CoreBlock && it.tile.team() == player.team() &&
+    if (it.tile.team() == player.team() &&
             it.tile.within(player.x,player.y, itemTransferRange)){
-        launch(Dispatchers.game) { player.cityMenu(it.tile.build as CoreBuild) }
+        launch(Dispatchers.game) {
+            if (it.tile.block() is CoreBlock) player.cityMenu(it.tile.build as CoreBuild)
+            if (it.tile.block() is LaunchPad) player.launchPadMenu(it.tile.build as LaunchPad.LaunchPadBuild)
+        }
     }
+
 }
 
 listen<EventType.PlayerChatEvent>{
     playerLastSendText[it.player.uuid()] = it.message
 }
 
-
-listen<EventType.UnitDamageEvent>{
-    val unit: mindustry.gen.Unit = it.unit
-    val bullet: Bullet = it.bullet
+listen<EventType.UnitDamageEvent>{ e ->
+    val unit: mindustry.gen.Unit = e.unit
+    val bullet: Bullet = e.bullet
     val team = bullet.team
     team.techData().bulletStatusEffect.forEach { (t, u) ->
         if (team.techData().checkEffectBulletHit()) {
+            if (unit.hasEffect(StatusEffects.corroded))
+                Units.nearby(unit.team, unit.x, unit.y, 8f * 8f){
+                    if (unit.hasEffect(StatusEffects.corroded) && team.techData().checkEffectBulletHit()){
+                        it.apply(StatusEffects.shocked, u)
+                        it.apply(StatusEffects.blasted, u)
+                    }
+                    it.apply(t, unit.getDuration(t))
+                }
             unit.apply(t, u)
         }
     }
